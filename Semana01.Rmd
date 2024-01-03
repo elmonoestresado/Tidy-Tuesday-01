@@ -1,0 +1,188 @@
+---
+title: "TidyTuesday 01: Distribución de matrícula y escuelas en primaria según gestión, año 2023"
+author: "Elaboración: El mono estresado"
+date: ""
+output: 
+  html_document: 
+    code_folding: hide
+    theme: lumen
+    highlight: espresso
+    toc: TRUE
+    number_section: FALSE
+    toc_depth: 4
+    toc_float: 
+      collapsed: FALSE
+---
+
+```{r Preámbulo, echo=FALSE, message=FALSE, warning=FALSE}
+
+rm(list=ls()) #Limpiar interfase
+options(scipen = 999) #Sin notación científica
+
+```
+
+```{r Librerías}
+
+library(foreign)
+library(openxlsx)
+library(readxl)
+library(tidyverse)
+library(writexl)
+library(tidyr)
+library(dplyr)
+library(gt)
+library(ggplot2)
+library(ggpubr)
+library(purrr)
+library(fst)
+library(haven)
+
+```
+
+```{r Funciones generales}
+
+#Conteo de missing en todas las variables#
+#----------------------------------------#
+
+funmiss <- function(x) {sum(is.na(x))/length(x)*100}
+
+#Redondear#
+#---------#
+
+redondear<-function(x,d=0){
+  (floor(x*10**d)+as.numeric((x*10**d-floor(x*10**d))>=0.5))/10**d
+}
+
+#Cambiar punto por coma decimal#
+#------------------------------#
+
+puntocoma2<-function(x,dec=0){
+  if(is.numeric(x)){
+    if(length(dim(x))==2){
+      gsub("\\.",",",apply(redondear(x,dec), 2, sprintf,fmt=paste0("%.",dec,"f")))
+    }else{gsub("\\.",",",sprintf(paste0("%.",dec,"f"), redondear(x,dec)))}
+  }else{
+    if(length(dim(x))==2){
+      redondear(apply(gsub(",","\\.",x),2,as.numeric),dec)
+    }else{redondear(as.numeric(gsub(",","\\.",x)),dec)}
+  }
+  
+} 
+
+#Ver en Excel#
+#------------#
+
+show_in_excel <- function(.data){
+  tmp <- paste0(tempfile(),".xlsx")
+  write.xlsx(.data,tmp)
+  browseURL(url=tmp)
+}
+
+```
+
+```{r Bases de datos}
+
+padron23 <- read.fst("01 Bases/padron_ce_23.fst")
+
+```
+
+```{r Preparación de la base}
+
+bd1 <- padron23 %>% 
+  filter(NIV_MOD %in% "B0" & D_FORMA %in% "Escolarizada") %>% 
+  mutate(gestion2 = case_when(GESTION %in% "3" ~ "Privada",
+                              TRUE ~ "Pública")) %>% 
+  select(REGION_EDU,COD_MOD,ANEXO,gestion2,GES_DEP,D_GES_DEP,TALUMNO)
+
+
+# Porcentaje de estudiantes en escuelas públicas por región
+
+a1 <- bd1 %>% 
+  group_by(REGION_EDU,gestion2) %>% 
+  summarise(tot = sum(TALUMNO, na.rm=T)) %>% 
+  mutate(ptot = redondear(tot/sum(tot)*100,1)) %>% 
+  filter(gestion2 %in% "Pública") %>%
+  mutate(categoria = "Matrícula en escuelas públicas") %>% 
+  select(dre = REGION_EDU,ptot, categoria) 
+  
+# Porcentaje de escuelas públicas por región
+
+a2 <- bd1 %>% 
+  group_by(REGION_EDU,gestion2) %>% 
+  summarise(tot = n()) %>% 
+  mutate(ptot = redondear(tot/sum(tot)*100,1)) %>% 
+  filter(gestion2 %in% "Pública") %>%
+  mutate(categoria = "Escuelas públicas") %>% 
+  select(dre = REGION_EDU,ptot, categoria)
+
+# Integración de las bases
+
+a_int <- rbind(a1,a2) %>% 
+  mutate(etiq = puntocoma2(ptot,1),
+         new_ptot = case_when(categoria %in% "Matrícula en escuelas públicas" ~ ptot*-1,
+                              TRUE ~ ptot),
+         dre = substr(dre, 4, nchar(dre))) %>% 
+  mutate(dre = str_replace_all(dre," ","")) %>% 
+  mutate(dre = str_to_title(tolower(dre))) %>% 
+  mutate(dre = case_when(dre %in% "Ancash" ~ "Áncash",
+                         dre %in% "Apurimac" ~ "Apurímac",
+                         dre %in% "Huanuco" ~ "Huánuco",
+                         dre %in% "Junin" ~ "Junín",
+                         dre %in% "Lalibertad" ~ "La Libertad",
+                         dre %in% "Limametropolitana" ~ "Lima Metropolitana",
+                         dre %in% "Limaprovincias" ~ "Provincia de Lima",
+                         dre %in% "Madrededios" ~ "Madre de Dios",
+                         dre %in% "Sanmartin" ~ "San Martín",
+                         TRUE ~ dre))
+
+```
+
+```{r Gráfico}
+
+orden_dre <- rev(unique(a_int$dre)) #Orden del eje y
+
+grafico1 <- ggplot(a_int, aes(x = new_ptot, y = factor(dre,levels = orden_dre), fill = categoria)) + 
+  geom_col() + 
+  geom_vline(xintercept = 0,
+             color = "#737373") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        panel.border = element_rect(color = "#737373"),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 10),
+        legend.title = element_blank(),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10),
+        plot.title = element_text(size = 12,
+                                  face = "bold"),
+        plot.subtitle = element_text(size = 10)) +
+  scale_x_continuous(limits = c(-110,110)) +
+  scale_fill_manual(values = c("#ef3b2c","#6baed6"),
+                    breaks = c("Matrícula en escuelas públicas","Escuelas públicas"),
+                    labels = c("% de matrícula en IE públicas", "% de IE públicas")) + 
+  geom_text(aes(label = etiq,
+                hjust = case_when(new_ptot > 0 ~ -0.2,
+                                  TRUE ~ 1.2)),
+            size = 3.0) + 
+  labs(title = "Distribución de matrícula y escuelas en primaria según gestión \nAño 2023",
+       subtitle = str_wrap("La distribución de escuelas públicas y de estudiantes matriculados en estas es diferente a lo largo del territorio peruano. Por ejemplo, en la región de Amazonas el 98,4% de estudiantes de primaria se encuentran matriculados en escuelas públicas. Asimismo, las escuelas públicas representan el 99,2% del total de escuelas en dicha región. En Ica, el 74,3% de estudiantes de la región se encuentran matriculados en escuelas públicas, y estas representan el 59,8% del total de escuelas en la región", width = 120))
+
+ggsave(grafico1,
+         filename = "Gráficos/TidyTuesday_01.png",
+         w = 9.0,
+         h = 8.0,
+         dpi = 1000)
+
+```
+
+
+
+
+
+
+
+
+
+
